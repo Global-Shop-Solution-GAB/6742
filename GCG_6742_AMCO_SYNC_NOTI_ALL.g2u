@@ -1,0 +1,169 @@
+﻿Program.Sub.Preflight.Start
+v.Global.sCompanyCode.Declare(String)
+Program.Sub.Preflight.End
+
+'check and close previous PID
+'check if new order import 
+'	if any, send email noti
+Program.Sub.Main.Start
+f.Intrinsic.Control.Try
+	v.Global.sCompanyCode.Set("AGA1")
+	f.Intrinsic.Control.CallSub(CheckAndClosePID)
+	v.Global.sCompanyCode.Set("AGA2")
+	f.Intrinsic.Control.CallSub(CheckAndClosePID)
+	v.Global.sCompanyCode.Set("MTX1")
+	f.Intrinsic.Control.CallSub(CheckAndClosePID)
+	v.Global.sCompanyCode.Set("MTX2")
+	f.Intrinsic.Control.CallSub(CheckAndClosePID)
+	
+	f.Intrinsic.Control.CallSub(SendEmailNoti)
+	
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub(ErrorLog, "argMsg", v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+'check PID
+program.Sub.CheckAndClosePID.Start
+
+f.Intrinsic.Control.Try
+		
+	v.Local.bExists.Declare(Boolean)	
+	v.Local.sPID.Declare(String)
+	v.Local.sFile.Declare(String)
+	v.Local.sPIDFile.Declare(String)
+	
+	f.Intrinsic.String.Build("{0}\6742\{1}",v.Caller.FilesDir, v.Global.sCompanyCode, v.Local.sFile)
+	
+	'check PID
+	f.Intrinsic.String.Build("{0}\6742\{1}\PID.txt",v.Caller.FilesDir, v.Global.sCompanyCode, v.Local.sPIDFile)
+	f.Intrinsic.file.Exists(v.Local.sPIDFile,v.Local.bExists)
+	
+	'bFileExists?
+	f.Intrinsic.control.If(v.Local.bExists,=,true)
+		f.Intrinsic.File.File2String(v.Local.sPIDFile,v.Local.sPID)
+		'bReadValueValid?
+		f.Intrinsic.Control.If(v.Local.sPID,<>,"")
+			f.Intrinsic.task.PIDRunning(v.Local.sPID,v.Local.bExists)
+			'bPIDRunning?
+			'if runs, terminate
+			f.Intrinsic.Control.If(v.Local.bExists,=,true)
+				f.Intrinsic.Task.TerminatePID(v.Local.sPID)
+			f.Intrinsic.Control.EndIf	
+		f.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.EndIf
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub(ErrorLog, "argMsg", v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+
+program.Sub.CheckAndClosePID.End
+
+'check and send noti 
+Program.Sub.SendEmailNoti.Start
+f.Intrinsic.Control.Try
+	v.Local.sSQL.Declare(String)
+	v.Local.sWebOrder.Declare(String)
+	v.Local.sNoti.Declare(String)
+	v.Local.iCounter.Declare(Long)
+	v.Local.iPass.Declare(Long)
+	v.Local.iFail.Declare(Long)
+	v.Local.sFile.Declare(String)
+	v.Local.bExist.Declare(Boolean)
+	v.Local.iUser.Declare(String)
+	v.Local.sSubj.Declare(String)
+	v.Local.sFilepath.Declare(String)
+	v.Local.sFileName.Declare(String)
+	v.Local.sFileAttach.Declare(String)
+	
+	F.Global.Security.GetUserID(v.Caller.User,v.Caller.CompanyCode,v.Local.iUser)
+	
+	f.ODBC.Connection!Con.OpenCompanyConnection
+		f.Intrinsic.Control.If(v.DataTable.dtSyncResult.Exists)
+			f.Data.Datatable.Close("dtSyncResult")
+		f.Intrinsic.Control.EndIf
+		f.Data.Datatable.CreateFromSQL("dtSyncResult", "con", "select TIMESTAMP, RTRIM(COMPANY_CODE) COMPANY_CODE, RTRIM(WEBORDERID) WEB_ORDER, RTRIM(GSSORDER_NO) GSS_ORDER, RTRIM(PASS_FAIL) PASS_FAIL from GCG_6742_LOG where EMAIL_SENT is NULL", True)
+
+	f.Intrinsic.Control.If(v.DataTable.dtSyncResult.RowCount,>,0)
+		
+		f.ODBC.Connection!Con.ExecuteAndReturn("select count(1) from GCG_6742_LOG where EMAIL_SENT is NULL and RTRIM(PASS_FAIL)='PASS'", v.Local.iPass)
+		f.ODBC.Connection!Con.ExecuteAndReturn("select count(1) from GCG_6742_LOG where EMAIL_SENT is NULL and RTRIM(PASS_FAIL)='FAIL'", v.Local.iFail)
+		f.Intrinsic.String.Build("Pass:{1}{0}Fail:{2}{0}", v.Ambient.NewLine, v.Local.iPass, v.Local.iFail, v.Local.sNoti)
+		
+		f.Intrinsic.String.Build("{0}\6742\{1}\Results", v.Caller.FilesDir, v.Caller.CompanyCode, v.Local.sFile)
+		v.Local.sFilepath.Set(v.Local.sFile)
+		
+		'export file
+		'check dir
+		f.Intrinsic.File.DirExists(v.Local.sFile, v.Local.bExist)
+		f.Intrinsic.Control.If(v.Local.bExist,=,False)
+			f.Intrinsic.File.CreateDir(v.Local.sFile)
+		f.Intrinsic.Control.EndIf
+		
+		f.Intrinsic.String.Build("{0}\Sync Result {1} {2}.csv", v.Local.sFile, v.Ambient.Now.FormatYYYY-MM-DD, v.Ambient.Now.FormatHHMMSS, v.Local.sFile)
+		f.Intrinsic.String.Replace(v.Local.sFile, v.Local.sFilepath,"", v.Local.sFileName)
+		f.Intrinsic.String.Replace(v.Local.sFileName,"\","", v.Local.sFileName)
+		f.Data.Datatable.SaveToCSV("dtSyncResult", v.Local.sFile, True)
+
+		f.Intrinsic.String.Build("{0}*!*{1}", v.Local.sFileName, v.Local.sFilepath, v.Local.sFileAttach)
+		'send email
+		v.Local.sSubj.set("AmeriCommerce-GSS Sync Result")
+		f.Global.Messaging.QueueMessage(v.Caller.CompanyCode, v.Local.iUser, "6742", v.Local.sSubj,"ipicustomerservice@iowa.gov", "ipicustomerservice@iowa.gov", v.Local.sNoti,-1, "", False, "", "", "", "", "", "", "", v.Local.sFileAttach, false)
+'		f.Global.Messaging.QueueMessage(v.Caller.CompanyCode, v.Local.iUser, "6742", v.Local.sSubj,"peter.quackenbush@iowa.gov", "nle@gssmail.com", v.Local.sNoti,-1, "", False, "", "", "", "", "", "", "", v.Local.sFileAttach, false)
+		
+		'update table
+		f.Intrinsic.Control.For(v.Local.iCounter,0,v.DataTable.dtSyncResult.RowCount--,1)
+			f.Intrinsic.String.Build("update GCG_6742_LOG set EMAIL_SENT='Y' where RTRIM(WEBORDERID)='{0}' and EMAIL_SENT is NULL", v.DataTable.dtSyncResult(v.Local.iCounter).WEB_ORDER!FieldValTrim, v.Local.sSQL)
+			f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+		f.Intrinsic.Control.Next(v.Local.iCounter)
+		
+	f.Intrinsic.Control.EndIf
+	
+	f.ODBC.Connection!Con.Close
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub(ErrorLog, "argMsg", v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+Program.Sub.SendEmailNoti.End
+
+'This log is trigger when there are errors in the program
+'arg: argMsg
+Program.Sub.ErrorLog.Start
+v.Local.sFileName.Declare(String)
+v.Local.isFileExists.Declare(Boolean)
+v.Local.isDirExists.Declare(Boolean)
+v.Local.sLogMsg.Declare(String)
+
+	'Add time stamp to file name
+	f.Intrinsic.String.Build("{0}\{1}\{2}1\{3}", v.Caller.FilesDir, "6742", v.Caller.CompanyCode, "Error Log",  v.Local.sFileName)
+	
+	f.Intrinsic.File.DirExists(v.Local.sFileName, v.Local.isDirExists)
+	
+	f.Intrinsic.Control.If(v.Local.isDirExists,=,False)
+		f.Intrinsic.File.CreateDir(v.Local.sFileName)
+	f.Intrinsic.Control.EndIf
+	
+	f.Intrinsic.String.Build("{0}\{1}{2}", v.Local.sFileName, "Error Log on  ",v.Ambient.Now.FormatYYYYMMDD-HHNNSS,v.Local.sFileName)
+	
+	f.Intrinsic.String.Build("{0}{1}",v.Local.sFileName,".txt",v.Local.sFileName)
+	
+	'check file exist
+	f.Intrinsic.File.Exists(v.Local.sFileName, v.Local.isFileExists)
+	
+	f.Intrinsic.Control.If(v.Local.isFileExists,=,False)
+		f.Intrinsic.File.String2File(v.Local.sFileName, "Start Log")
+		f.Intrinsic.File.Append2File(v.Local.sFileName, v.Ambient.NewLine)
+		f.Intrinsic.File.Append2File(v.Local.sFileName, "********************")
+		f.Intrinsic.File.Append2File(v.Local.sFileName, v.Ambient.NewLine)
+		
+	f.Intrinsic.Control.EndIf
+	
+	'append
+	v.Local.sLogMsg.Set(v.Args.argMsg)
+	f.Intrinsic.String.Build("{0} {1}: {2}", v.Ambient.Now.FormatMM/DD/YYYY, v.Ambient.Now.FormatHH:NN:SS, v.Local.sLogMsg, v.Local.sLogMsg)
+	f.Intrinsic.File.Append2File(v.Local.sFileName, v.Local.sLogMsg)
+
+Program.Sub.ErrorLog.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$nle$}$20220707155147836$}$kjzCRYkA6UEoRnCwndYnRRprGWLiMW8tMT/AlRAMmr35rBFbUdf9zm2nXUpEWkEy
+Program.Sub.Comments.End
